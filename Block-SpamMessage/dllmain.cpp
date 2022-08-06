@@ -2,12 +2,52 @@
 #include "minhook/minhook.h"
 #include "sigscan.h"
 
+#include <iostream>
+#include <iomanip>
+#include <sstream>
+#include <fstream>
+#include <codecvt>
+
+using namespace std;
+
 bool g_running = true;
-bool IsSpam(std::string message) {
-	const char* words[] = { "外挂", "群", "刷", "VX", "微", "解锁", "辅助", "淘宝", "卡网", "科技", "成人", "少妇", "萝莉", "淫", "少女", "片", "官网", "www", "WWW", "xyz", "top", "cn", "QQ", "qq", "激情" };
-	for (int i = 0; i < 25; i++)
+
+std::vector<string> words;
+
+std::string UTF8_To_GBK(const std::string& source)
+{
+	enum { GB2312 = 936 };
+
+	unsigned long len = ::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, NULL, NULL);
+	if (len == 0)
+		return std::string();
+	wchar_t* wide_char_buffer = new wchar_t[len];
+	::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, wide_char_buffer, len);
+
+	len = ::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, NULL, NULL, NULL, NULL);
+	if (len == 0)
 	{
-		if (strstr(message.c_str(), words[i]) != NULL)
+		delete[] wide_char_buffer;
+		return std::string();
+	}
+	char* multi_byte_buffer = new char[len];
+	::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, multi_byte_buffer, len, NULL, NULL);
+
+	std::string dest(multi_byte_buffer);
+	delete[] wide_char_buffer;
+	delete[] multi_byte_buffer;
+	return dest;
+}
+
+bool IsSpam(string message)
+{
+	for (auto& c : message) {
+		c = tolower(c);
+	}
+
+	for (int i = 0; i < words.size(); i++)
+	{
+		if (strstr(message.c_str(), words[i].c_str()) != NULL)
 			return true;
 	}
 	return false;
@@ -29,7 +69,7 @@ get_chat_data_t m_get_chat_data{};
 get_chat_data_t og_get_chat_data = nullptr;
 __int64 __cdecl hk_get_chat_data(__int64 a1, __int64 a2, __int64 a3, const char* receivetext, BOOL a5)
 {
-	bool isspam = IsSpam(receivetext);
+	bool isspam = IsSpam(UTF8_To_GBK(receivetext));
 	if (isspam)
 		return 0;
 
@@ -45,8 +85,23 @@ bool hk_event_network_text_message_received(CEventNetWorkTextMessageReceived* a1
 	return og_event_network_text_message_received(a1, a2, a3);
 }
 
-DWORD Mainthread(LPVOID lp)
+DWORD Mainthread(HMODULE hModule)
 {
+	ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\SensitiveWord.txt");
+	string line;
+	if (infile)
+	{
+		while (getline(infile, line))
+		{
+			for (auto& c : line) {
+				c = tolower(c);
+			}
+			words.push_back(UTF8_To_GBK(line));
+		}
+	}
+	infile.close();
+	line.clear();
+
 	MH_Initialize();
 
 	pattern_batch main_batch;
@@ -64,9 +119,17 @@ DWORD Mainthread(LPVOID lp)
 	MH_CreateHook(m_event_network_text_message_received, hk_event_network_text_message_received, (LPVOID*)&og_event_network_text_message_received);
 	MH_EnableHook(MH_ALL_HOOKS);
 
+	Beep(600, 75);
+
 	while (g_running)
 	{
-
+		if (GetAsyncKeyState(VK_END) & 0x8000)
+		{
+			Beep(500, 75);
+			MH_Uninitialize();
+			FreeLibraryAndExitThread(hModule, 0);
+			return 0;
+		}
 	}
 
 	return 0;
@@ -78,7 +141,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 	{
 	case DLL_PROCESS_ATTACH:
 		DisableThreadLibraryCalls(hModule);
-		CreateThread(NULL, NULL, static_cast<LPTHREAD_START_ROUTINE>(Mainthread), hModule, NULL, NULL);
+		CreateThread(NULL, NULL, (LPTHREAD_START_ROUTINE)Mainthread, hModule, NULL, NULL);
 	case DLL_THREAD_ATTACH:
 	case DLL_THREAD_DETACH:
 	case DLL_PROCESS_DETACH:
