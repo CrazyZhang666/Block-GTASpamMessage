@@ -87,7 +87,7 @@ bool hk_event_network_text_message_received(CEventNetWorkTextMessageReceived* a1
 
 DWORD Mainthread(HMODULE hModule)
 {
-	ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\SensitiveWord.txt");
+	ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
 	string line;
 	if (infile)
 	{
