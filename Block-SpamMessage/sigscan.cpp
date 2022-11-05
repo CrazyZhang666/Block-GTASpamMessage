@@ -8,10 +8,6 @@ ptr_manage::ptr_manage(std::uintptr_t hand) {
 	m_ptr = reinterpret_cast<void*>(hand);
 }
 
-ptr_manage ptr_manage::add(int offset) {
-	return ptr_manage(as<std::uintptr_t>() + offset);
-}
-
 sModule::sModule(HMODULE hMod) : m_begin(hMod), m_end(nullptr), m_size(0) {
 	auto dosHeader = ptr_manage(m_begin).as<IMAGE_DOS_HEADER*>();
 	auto ntHeader = ptr_manage(m_begin).add(dosHeader->e_lfanew).as<IMAGE_NT_HEADERS*>();
