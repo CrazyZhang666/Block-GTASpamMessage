@@ -19,31 +19,6 @@ HMODULE hm;
 
 std::vector<string> words;
 
-std::string UTF8_To_GBK(const std::string& source)
-{
-	enum { GB2312 = 936 };
-
-	unsigned long len = ::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, NULL, NULL);
-	if (len == 0)
-		return std::string();
-	wchar_t* wide_char_buffer = new wchar_t[len];
-	::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, wide_char_buffer, len);
-
-	len = ::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, NULL, NULL, NULL, NULL);
-	if (len == 0)
-	{
-		delete[] wide_char_buffer;
-		return std::string();
-	}
-	char* multi_byte_buffer = new char[len];
-	::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, multi_byte_buffer, len, NULL, NULL);
-
-	std::string dest(multi_byte_buffer);
-	delete[] wide_char_buffer;
-	delete[] multi_byte_buffer;
-	return dest;
-}
-
 bool IsSpam(string message)
 {
 	for (auto& c : message) {
@@ -235,6 +210,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 		AllocConsole();
 		freopen("CONOUT$", "w", stdout);
 		SetConsoleOutputCP(CP_UTF8);
+		spdlog::set_level(spdlog::level::debug);
 #endif // _DEBUG
 
 		ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
