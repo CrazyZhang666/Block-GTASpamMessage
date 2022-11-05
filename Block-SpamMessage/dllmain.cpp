@@ -14,7 +14,7 @@
 
 using namespace std;
 
-bool g_running = true;
+HMODULE hm;
 
 std::vector<string> words;
 
@@ -180,28 +180,14 @@ bool receive_net_message(void* netConnectionManager, void* a2, InFrame* frame)
 	return og_receive_net_message(netConnectionManager, a2, frame);
 }
 
-DWORD Mainthread(HMODULE hModule)
+void freeandexit()
 {
-#ifdef _DEBUG
-	AllocConsole();
-	freopen("CONOUT$", "w", stdout);
-#endif // _DEBUG
+	FreeConsole();
+	MH_DisableHook(MH_ALL_HOOKS);
+	MH_Uninitialize();
+}
 
-	ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
-	string line;
-	if (infile)
-	{
-		while (getline(infile, line))
-		{
-			for (auto& c : line) {
-				c = tolower(c);
-			}
-			words.push_back(line);
-		}
-	}
-	infile.close();
-	line.clear();
-	spdlog::info("成功加载{}条违禁词", words.size());
+void loadHook() {
 
 	MH_Initialize();
 
@@ -224,22 +210,43 @@ DWORD Mainthread(HMODULE hModule)
 
 	MH_CreateHook(m_receive_net_message, receive_net_message, (LPVOID*)&og_receive_net_message);
 	MH_EnableHook(MH_ALL_HOOKS);
+}
 
-	spdlog::info("DLL loaded!");
+DWORD Mainthread()
+{
 	return 0;
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
-	switch (ul_reason_for_call)
+	hm = hModule;
+
+	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
-	case DLL_PROCESS_ATTACH:
-		DisableThreadLibraryCalls(hModule);
-		CreateThread(NULL, NULL, (LPTHREAD_START_ROUTINE)Mainthread, hModule, NULL, NULL);
-	case DLL_THREAD_ATTACH:
-	case DLL_THREAD_DETACH:
-	case DLL_PROCESS_DETACH:
-		break;
+		AllocConsole();
+		freopen("CONOUT$", "w", stdout);
+
+		ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
+		string line;
+		if (infile)
+		{
+			while (getline(infile, line))
+			{
+				for (auto& c : line) {
+					c = tolower(c);
+				}
+				words.push_back(line);
+			}
+		}
+		infile.close();
+		line.clear();
+		spdlog::info(UTF8_To_GBK(std::format("成功加载{}条违禁词", words.size())));
+
+
+		spdlog::info("DLL loaded!");
 	}
-	return TRUE;
+	else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+		freeandexit();
+
+	return true;
 }
