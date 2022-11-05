@@ -10,6 +10,7 @@
 
 #include <Windows.h>
 
+#define SPDLOG_WCHAR_TO_UTF8_SUPPORT
 #include <spdlog/spdlog.h>
 
 using namespace std;
@@ -167,7 +168,8 @@ bool receive_net_message(void* netConnectionManager, void* a2, InFrame* frame)
 				char buf[0x100]{};
 				if (buffer.ReadString(buf, 0x100))
 				{
-					if (IsSpam(UTF8_To_GBK(buf)))
+					spdlog::debug(buf);
+					if (IsSpam(buf))
 						return true;
 				}
 			}
@@ -187,6 +189,7 @@ void freeandexit()
 #endif // _DEBUG
 	MH_DisableHook(MH_ALL_HOOKS);
 	MH_Uninitialize();
+	spdlog::info("DLL unloaded!");
 }
 
 void loadHook() {
@@ -218,6 +221,8 @@ void loadHook() {
 
 	if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
 		spdlog::error("Failed to hook message receie event");
+
+	spdlog::info("hook loaded.");
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
@@ -229,7 +234,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 #ifdef _DEBUG
 		AllocConsole();
 		freopen("CONOUT$", "w", stdout);
-		std::wcout.imbue(std::locale("chs"));
+		SetConsoleOutputCP(CP_UTF8);
 #endif // _DEBUG
 
 		ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
@@ -244,10 +249,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 				words.push_back(line);
 			}
 			infile.close();
-			spdlog::info(UTF8_To_GBK(std::format("成功加载{}条违禁词", words.size())));
+			spdlog::info(std::format("成功加载{}条违禁词", words.size()));
 		}
 		else
-			spdlog::info(UTF8_To_GBK("加载违禁词失败"));
+			spdlog::info("加载违禁词失败");
+
+		loadHook();
 
 		spdlog::info("DLL loaded!");
 	}
