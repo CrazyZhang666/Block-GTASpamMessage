@@ -8,11 +8,38 @@
 #include <fstream>
 #include <codecvt>
 
+#include <Windows.h>
+
 using namespace std;
 
 bool g_running = true;
 
 std::vector<string> words;
+
+std::string UTF8_To_GBK(const std::string& source)
+{
+	enum { GB2312 = 936 };
+
+	unsigned long len = ::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, NULL, NULL);
+	if (len == 0)
+		return std::string();
+	wchar_t* wide_char_buffer = new wchar_t[len];
+	::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, wide_char_buffer, len);
+
+	len = ::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, NULL, NULL, NULL, NULL);
+	if (len == 0)
+	{
+		delete[] wide_char_buffer;
+		return std::string();
+	}
+	char* multi_byte_buffer = new char[len];
+	::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, multi_byte_buffer, len, NULL, NULL);
+
+	std::string dest(multi_byte_buffer);
+	delete[] wide_char_buffer;
+	delete[] multi_byte_buffer;
+	return dest;
+}
 
 bool IsSpam(string message)
 {
@@ -138,16 +165,12 @@ bool receive_net_message(void* netConnectionManager, void* a2, InFrame* frame)
 				char buf[0x100]{};
 				if (buffer.ReadString(buf, 0x100))
 				{
-					//if (player->is_spammer())
-					//	return true;
-
-					if (IsSpam(buf))
-					{
-						//player->set_spammer(true);
+					if (IsSpam(UTF8_To_GBK(buf)))
 						return true;
-					}
 				}
 			}
+			default:
+				break;
 			}
 		}
 	}
