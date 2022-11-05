@@ -10,6 +10,8 @@
 
 #include <Windows.h>
 
+#include <spdlog/spdlog.h>
+
 using namespace std;
 
 bool g_running = true;
@@ -180,6 +182,11 @@ bool receive_net_message(void* netConnectionManager, void* a2, InFrame* frame)
 
 DWORD Mainthread(HMODULE hModule)
 {
+#ifdef _DEBUG
+	AllocConsole();
+	freopen("CONOUT$", "w", stdout);
+#endif // _DEBUG
+
 	ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
 	string line;
 	if (infile)
@@ -194,11 +201,12 @@ DWORD Mainthread(HMODULE hModule)
 	}
 	infile.close();
 	line.clear();
+	spdlog::info("成功加载{}条违禁词", words.size());
 
 	MH_Initialize();
 
 	pattern_batch main_batch;
-	main_batch.add("EventNetWorkTextMessageReceived", "48 83 EC 20 4C 8B 71 50 33 ED", [=](ptr_manage ptr)
+	main_batch.add("NMR", "48 83 EC 20 4C 8B 71 50 33 ED", [=](ptr_manage ptr)
 		{
 			m_receive_net_message = ptr.sub(0x19).as<PVOID>();
 		});
@@ -216,6 +224,8 @@ DWORD Mainthread(HMODULE hModule)
 
 	MH_CreateHook(m_receive_net_message, receive_net_message, (LPVOID*)&og_receive_net_message);
 	MH_EnableHook(MH_ALL_HOOKS);
+
+	spdlog::info("DLL loaded!");
 	return 0;
 }
 
