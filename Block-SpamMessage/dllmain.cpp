@@ -182,39 +182,42 @@ bool receive_net_message(void* netConnectionManager, void* a2, InFrame* frame)
 
 void freeandexit()
 {
+#ifdef _DEBUG
 	FreeConsole();
+#endif // _DEBUG
 	MH_DisableHook(MH_ALL_HOOKS);
 	MH_Uninitialize();
 }
 
 void loadHook() {
-
-	MH_Initialize();
+	if (MH_Initialize() != MH_OK)
+		spdlog::error("Failed to init minhook");
 
 	pattern_batch main_batch;
 	main_batch.add("NMR", "48 83 EC 20 4C 8B 71 50 33 ED", [=](ptr_manage ptr)
 		{
+			spdlog::debug("NMR found.");
 			m_receive_net_message = ptr.sub(0x19).as<PVOID>();
 		});
 
 	main_batch.add("RBWD", "48 89 74 24 ? 57 48 83 EC 20 48 8B D9 33 C9 41 8B F0 8A", [=](ptr_manage ptr)
 		{
+			spdlog::debug("RBWD found.");
 			m_read_bitbuf_dword = ptr.sub(5).as<decltype(m_read_bitbuf_dword)>();
 		});
 
 	main_batch.add("RBS", "E8 ? ? ? ? 48 8D 4F 3C", [=](ptr_manage ptr)
 		{
+			spdlog::debug("RBS found.");
 			m_read_bitbuf_string = ptr.add(1).rip().as<decltype(m_read_bitbuf_string)>();
 		});
 	main_batch.run();
 
-	MH_CreateHook(m_receive_net_message, receive_net_message, (LPVOID*)&og_receive_net_message);
-	MH_EnableHook(MH_ALL_HOOKS);
-}
+	if (MH_CreateHook(m_receive_net_message, receive_net_message, (LPVOID*)&og_receive_net_message) != MH_OK)
+		spdlog::error("Failed to hook message receie event");
 
-DWORD Mainthread()
-{
-	return 0;
+	if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
+		spdlog::error("Failed to hook message receie event");
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
@@ -223,13 +226,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 
 	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
+#ifdef _DEBUG
 		AllocConsole();
 		freopen("CONOUT$", "w", stdout);
+		std::wcout.imbue(std::locale("chs"));
+#endif // _DEBUG
 
 		ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
-		string line;
-		if (infile)
+		if (infile.is_open())
 		{
+			std::string line;
 			while (getline(infile, line))
 			{
 				for (auto& c : line) {
@@ -237,11 +243,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReser
 				}
 				words.push_back(line);
 			}
+			infile.close();
+			spdlog::info(UTF8_To_GBK(std::format("成功加载{}条违禁词", words.size())));
 		}
-		infile.close();
-		line.clear();
-		spdlog::info(UTF8_To_GBK(std::format("成功加载{}条违禁词", words.size())));
-
+		else
+			spdlog::info(UTF8_To_GBK("加载违禁词失败"));
 
 		spdlog::info("DLL loaded!");
 	}
