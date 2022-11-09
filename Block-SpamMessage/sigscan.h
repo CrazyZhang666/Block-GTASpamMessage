@@ -20,7 +20,22 @@ public:
 		return reinterpret_cast<T>(m_ptr);
 	}
 
-	ptr_manage add(int offset);
+	template <typename T>
+	inline ptr_manage add(T offset)
+	{
+		return ptr_manage(as<std::uintptr_t>() + offset);
+	}
+
+	template <typename T>
+	inline ptr_manage sub(T offset)
+	{
+		return ptr_manage(as<std::uintptr_t>() - offset);
+	}
+
+	inline ptr_manage rip()
+	{
+		return add(as<std::int32_t&>()).add(4);
+	}
 
 	inline operator bool() { return m_ptr != nullptr; }
 private:

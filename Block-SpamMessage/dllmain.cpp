@@ -8,36 +8,16 @@
 #include <fstream>
 #include <codecvt>
 
+#include <Windows.h>
+
+#define SPDLOG_WCHAR_TO_UTF8_SUPPORT
+#include <spdlog/spdlog.h>
+
 using namespace std;
 
-bool g_running = true;
+HMODULE hm;
 
 std::vector<string> words;
-
-std::string UTF8_To_GBK(const std::string& source)
-{
-	enum { GB2312 = 936 };
-
-	unsigned long len = ::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, NULL, NULL);
-	if (len == 0)
-		return std::string();
-	wchar_t* wide_char_buffer = new wchar_t[len];
-	::MultiByteToWideChar(CP_UTF8, NULL, source.c_str(), -1, wide_char_buffer, len);
-
-	len = ::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, NULL, NULL, NULL, NULL);
-	if (len == 0)
-	{
-		delete[] wide_char_buffer;
-		return std::string();
-	}
-	char* multi_byte_buffer = new char[len];
-	::WideCharToMultiByte(GB2312, NULL, wide_char_buffer, -1, multi_byte_buffer, len, NULL, NULL);
-
-	std::string dest(multi_byte_buffer);
-	delete[] wide_char_buffer;
-	delete[] multi_byte_buffer;
-	return dest;
-}
 
 bool IsSpam(string message)
 {
@@ -53,99 +33,209 @@ bool IsSpam(string message)
 	return false;
 }
 
-class CEventNetWorkTextMessageReceived
+PVOID m_receive_net_message{};
+
+class datBitBuffer;
+class InFrame;
+
+typedef bool (*ReceiveNetMessage)(void* netConnectionManager, void* a2, InFrame* frame);
+ReceiveNetMessage og_receive_net_message{};
+using read_bitbuf_dword = bool(*)(datBitBuffer* buffer, PVOID read, int bits);
+using read_bitbuf_string = bool(*)(datBitBuffer* buffer, char* read, int bits);
+read_bitbuf_dword m_read_bitbuf_dword{};
+read_bitbuf_string m_read_bitbuf_string{};
+
+enum class eNetMessage : uint32_t {
+	CMsgInvalid = 0xFFFFF,
+	CMsgTextMessage = 0x24, // this one is for chat
+	CMsgTextMessage2 = 0x0A // this one is for phone message
+};
+
+class datBitBuffer
 {
 public:
-	char pad_0000[24]; //0x0000
-	char m_info[8]; //0x0018
-	char pad_0020[36]; //0x0020
-}; //Size: 0x0044
+	datBitBuffer(uint8_t* data, uint32_t size) {
+		m_data = data;
+		m_bitOffset = 0;
+		m_maxBit = size * 8;
+		m_bitsRead = 0;
+		m_curBit = 0;
+		m_highestBitsRead = 0;
+		m_flagBits = 0;
+	}
+	bool ReadDword(uint32_t* integer, int bits) {
+		return m_read_bitbuf_dword(this, integer, bits);
+	}
+	bool ReadString(char* string, int bits) {
+		return m_read_bitbuf_string(this, string, bits);
+	}
+public:
+	uint8_t* m_data; //0x0000
+	uint32_t m_bitOffset; //0x0008
+	uint32_t m_maxBit; //0x000C
+	uint32_t m_bitsRead; //0x0010
+	uint32_t m_curBit; //0x0014
+	uint32_t m_highestBitsRead; //0x0018
+	uint8_t m_flagBits; //0x001C
+};
 
-using event_network_text_message_received_t = char __fastcall (CEventNetWorkTextMessageReceived* a1, DWORD64* a2, int a3);
-typedef __int64(__cdecl* get_chat_data_t)(__int64 a1, __int64 a2, __int64 a3, const char* receivetext, BOOL a5);
-event_network_text_message_received_t* m_event_network_text_message_received{};
-get_chat_data_t m_get_chat_data{};
-
-get_chat_data_t og_get_chat_data = nullptr;
-__int64 __cdecl hk_get_chat_data(__int64 a1, __int64 a2, __int64 a3, const char* receivetext, BOOL a5)
+class InFrame
 {
-	bool isspam = IsSpam(UTF8_To_GBK(receivetext));
-	if (isspam)
-		return 0;
-
-	return og_get_chat_data(a1, a2, a3, receivetext, a5);
-}
-
-event_network_text_message_received_t* og_event_network_text_message_received = nullptr;
-bool hk_event_network_text_message_received(CEventNetWorkTextMessageReceived* a1, DWORD64* a2, int a3)
-{
-	bool isspam = IsSpam(a1->m_info);
-	if (isspam)
-		return false;
-	return og_event_network_text_message_received(a1, a2, a3);
-}
-
-DWORD Mainthread(HMODULE hModule)
-{
-	ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
-	string line;
-	if (infile)
+public:
+	enum class EventType
 	{
-		while (getline(infile, line))
+		ConnectionClosed = 3,
+		FrameReceived = 4,
+		BandwidthExceeded = 6,
+		OutOfMemory = 7
+	};
+
+	virtual ~InFrame() = default;
+
+	virtual void destroy() = 0;
+	virtual EventType get_event_type() = 0;
+	virtual uint32_t _0x18() = 0;
+
+	char pad_0008[56]; //0x0008
+	uint32_t m_msg_id; //0x0040
+	uint32_t m_connection_identifier; //0x0044
+	InFrame* m_this; //0x0048
+	uint32_t m_peer_id; //0x0050
+	char pad_0050[36]; //0x0058
+	uint32_t m_length; //0x0078
+	char pad_007C[4]; //0x007C
+	void* m_data; //0x0080
+};
+static_assert(sizeof(InFrame) == 0x88);
+
+bool get_msg_type(eNetMessage& msgType, datBitBuffer& buffer)
+{
+	uint32_t pos;
+	uint32_t magic;
+	uint32_t length;
+	uint32_t extended{};
+	if ((buffer.m_flagBits & 2) != 0 || (buffer.m_flagBits & 1) == 0 ? (pos = buffer.m_curBit) : (pos = buffer.m_maxBit),
+		buffer.m_bitsRead + 15 > pos || !buffer.ReadDword(&magic, 14) || magic != 0x3246 || !buffer.ReadDword(&extended, 1)) {
+		msgType = eNetMessage::CMsgInvalid;
+		return false;
+	}
+	length = extended ? 16 : 8;
+	if ((buffer.m_flagBits & 1) == 0 ? (pos = buffer.m_curBit) : (pos = buffer.m_maxBit), length + buffer.m_bitsRead <= pos && buffer.ReadDword((uint32_t*)&msgType, length))
+		return true;
+	else
+		return false;
+}
+
+bool receive_net_message(void* netConnectionManager, void* a2, InFrame* frame)
+{
+	if (frame->get_event_type() == InFrame::EventType::FrameReceived)
+	{
+		datBitBuffer buffer((uint8_t*)frame->m_data, frame->m_length);
+		buffer.m_flagBits = 1;
+		eNetMessage msgType;
+		if (get_msg_type(msgType, buffer))
 		{
-			for (auto& c : line) {
-				c = tolower(c);
+			switch (msgType)
+			{
+			case eNetMessage::CMsgTextMessage:
+			case eNetMessage::CMsgTextMessage2:
+			{
+				char buf[0x100]{};
+				if (buffer.ReadString(buf, 0x100))
+				{
+					spdlog::debug(buf);
+					if (IsSpam(buf))
+						return true;
+				}
 			}
-			words.push_back(UTF8_To_GBK(line));
+			default:
+				break;
+			}
 		}
 	}
-	infile.close();
-	line.clear();
 
-	MH_Initialize();
+	return og_receive_net_message(netConnectionManager, a2, frame);
+}
+
+void freeandexit()
+{
+#ifdef _DEBUG
+	FreeConsole();
+#endif // _DEBUG
+	MH_DisableHook(MH_ALL_HOOKS);
+	MH_Uninitialize();
+	spdlog::info("DLL unloaded!");
+}
+
+void loadHook() {
+	if (MH_Initialize() != MH_OK)
+		spdlog::error("Failed to init minhook");
 
 	pattern_batch main_batch;
-	main_batch.add("EventNetWorkTextMessageReceived", "48 83 EC 28 4C 8B CA 48 85 D2 0F 84 ? ? ? ? 41 BA ? ? ? ? 45 3B C2 0F 85 ? ? ? ? 48 8D 51 18 48 8B C2 49 0B C1 83 E0 0F 0F 85 ? ? ? ? B8 ? ? ? ? 8D 48 7F 0F 28 02 41 0F 29 01 0F 28 4A 10 41 0F 29 49 ? 0F 28 42 20 41 0F 29 41 ? 0F 28 4A 30 41 0F 29 49 ? 0F 28 42 40 41 0F 29 41 ? 0F 28 4A 50 41 0F 29 49 ? 0F 28 42 60 41 0F 29 41 ? 0F 28 4A 70 4C 03 C9 48 03 D1 41 0F 29 49 ? 48 FF C8 75 AF 0F 28 02 41 0F 29 01 0F 28 4A 10 41 0F 29 49 ? 0F 28 42 20 41 0F 29 41 ? 0F 28 4A 30 41 0F 29 49 ? 0F 28 42 40 41 0F 29 41 ? 0F 28 4A 50 41 0F 29 49 ? 48 8B 42 60", [=](ptr_manage ptr)
+	main_batch.add("NMR", "48 83 EC 20 4C 8B 71 50 33 ED", [=](ptr_manage ptr)
 		{
-			m_event_network_text_message_received = ptr.as<event_network_text_message_received_t*>();
+			spdlog::debug("NMR found.");
+			m_receive_net_message = ptr.sub(0x19).as<PVOID>();
 		});
-	main_batch.add("get_chat_data", "48 89 5C 24 ? 48 89 74 24 ? 57 48 83 EC 30 49 8B F8 44 8B 81 ? ? ? ?", [=](ptr_manage ptr)
+
+	main_batch.add("RBWD", "48 89 74 24 ? 57 48 83 EC 20 48 8B D9 33 C9 41 8B F0 8A", [=](ptr_manage ptr)
 		{
-			m_get_chat_data = ptr.as<get_chat_data_t>();
+			spdlog::debug("RBWD found.");
+			m_read_bitbuf_dword = ptr.sub(5).as<decltype(m_read_bitbuf_dword)>();
+		});
+
+	main_batch.add("RBS", "E8 ? ? ? ? 48 8D 4F 3C", [=](ptr_manage ptr)
+		{
+			spdlog::debug("RBS found.");
+			m_read_bitbuf_string = ptr.add(1).rip().as<decltype(m_read_bitbuf_string)>();
 		});
 	main_batch.run();
 
-	MH_CreateHook(m_get_chat_data, hk_get_chat_data, (LPVOID*)&og_get_chat_data);
-	MH_CreateHook(m_event_network_text_message_received, hk_event_network_text_message_received, (LPVOID*)&og_event_network_text_message_received);
-	MH_EnableHook(MH_ALL_HOOKS);
+	if (MH_CreateHook(m_receive_net_message, receive_net_message, (LPVOID*)&og_receive_net_message) != MH_OK)
+		spdlog::error("Failed to hook message receie event");
 
-	Beep(600, 75);
+	if (MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
+		spdlog::error("Failed to hook message receie event");
 
-	while (g_running)
-	{
-		if (GetAsyncKeyState(VK_END) & 0x8000)
-		{
-			Beep(500, 75);
-			MH_Uninitialize();
-			FreeLibraryAndExitThread(hModule, 0);
-			return 0;
-		}
-	}
-
-	return 0;
+	spdlog::info("hook loaded.");
 }
 
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD  ul_reason_for_call, LPVOID lpReserved)
 {
-	switch (ul_reason_for_call)
+	hm = hModule;
+
+	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
-	case DLL_PROCESS_ATTACH:
-		DisableThreadLibraryCalls(hModule);
-		CreateThread(NULL, NULL, (LPTHREAD_START_ROUTINE)Mainthread, hModule, NULL, NULL);
-	case DLL_THREAD_ATTACH:
-	case DLL_THREAD_DETACH:
-	case DLL_PROCESS_DETACH:
-		break;
+#ifdef _DEBUG
+		AllocConsole();
+		freopen("CONOUT$", "w", stdout);
+		SetConsoleOutputCP(CP_UTF8);
+		spdlog::set_level(spdlog::level::debug);
+#endif // _DEBUG
+
+		ifstream infile("C:\\ProgramData\\GTA5OnlineTools\\Config\\BlockWords.txt");
+		if (infile.is_open())
+		{
+			std::string line;
+			while (getline(infile, line))
+			{
+				for (auto& c : line) {
+					c = tolower(c);
+				}
+				words.push_back(line);
+			}
+			infile.close();
+			spdlog::info(std::format("成功加载{}条违禁词", words.size()));
+		}
+		else
+			spdlog::info("加载违禁词失败");
+
+		loadHook();
+
+		spdlog::info("DLL loaded!");
 	}
-	return TRUE;
+	else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+		freeandexit();
+
+	return true;
 }
